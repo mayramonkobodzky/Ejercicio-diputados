@@ -1,0 +1,353 @@
+---
+title: "Informe de Análisis Estructural y Longitudinal de la Cámara de Diputados de la Nación"
+output: html_document
+date: "22/10/2026"
+---
+
+## Introducción:
+Este informe presenta un análisis estructural y longitudinal del comportamiento legislativo en la Cámara de Diputados de la Nación mediante la aplicación de técnicas de Análisis de Redes Sociales (SNA). A partir del procesamiento de las votaciones nominales registradas, modelamos el recinto como una red espacial donde cada legislador constituye un nodo y la coincidencia en sus patrones de voto determina la fuerza del vínculo ideológico.
+
+Este marco analítico permite trascender la cartografía partidaria tradicional para evaluar el comportamiento empírico de las bancadas. Para cumplir este objetivo, el documento se articula en dos secciones centrales:
+
+**Análisis Estático del Escenario 2026:**
+
+- Partición de bloques: Identificación de las comunidades topológicas detectadas por algoritmos de red y su correspondencia con los bloques formales.
+
+- Disidencias internas por bloque: Medición de las desviaciones de voto e indisciplina dentro de cada espacio político.
+
+- Legisladores puente: Detección de los actores clave que registran métricas elevadas de intermediación (betweenness), actuando como articuladores interbloque en la construcción de consensos.
+
+**Comparación Longitudinal (2025–2026):**
+
+- Fragmentación partidaria interna: Evaluación global de la evolución de la masa de votos y la atomización de la Cámara entre ambos períodos.
+
+- Evolución de la cohesión interna por bloque político: Análisis focalizado en una selección de las bancadas más representativas para observar transformaciones en su disciplina de voto y reordenamiento de alianzas.
+
+A través de esta metodología cuantitativa, el reporte ofrece una radiografía rigurosa sobre la reconfiguración de las coaliciones, el nivel de disciplina partidaria y el mapa de poder en el Congreso.
+
+<br>
+
+## Análisis 2026
+
+### 1. ¿Qué bloque está partido?
+
+Para analizar la disciplina partidaria, cruzamos la pertenencia formal de cada legislador a su bloque político con la comunidad empírica detectada por el algoritmo de redes (Fast Greedy).
+
+```{r setup, include=FALSE}
+# 1. CONFIGURACIÓN GLOBAL Y LIBRERIAS
+knitr::opts_chunk$set(
+  echo = FALSE,     
+  warning = FALSE,  
+  message = FALSE
+)
+
+library(data.table)
+library(tidyverse)
+library(knitr)
+library(stringr)
+
+# 2. CARGA DE DATOS
+df_nodos <- fread("Datos/dataframes_grafos_pruned.csv")
+distancias_idps <- fread("Datos/distancias_idps.csv.gz")
+l_metadata <- fread("Datos/legisladores_bloque_provincia.csv")
+```
+
+```{r bloques-partidos, fig.width=10, fig.height=6}
+
+# 3. GRAFICO DE FRAGMENTACION PARTIDARIA 2026
+
+# Filtramos para el año 2026
+df_anio <- df_nodos[anio == 2026]
+
+# --- ARREGLO DEL ORDEN DE LA LEYENDA ---
+# Extraemos solo el número de la palabra "Comunidad X" para ordenarlos numéricamente
+numeros_comunidad <- as.numeric(gsub("Comunidad ", "", unique(df_anio$comunidad)))
+niveles_ordenados <- paste("Comunidad", sort(numeros_comunidad))
+
+# Convertimos a factor forzando el orden matemático correcto (1, 2, 3... 10)
+df_anio[, comunidad := factor(comunidad, levels = niveles_ordenados)]
+
+# Armamos un diccionario vinculando cada "Comunidad X" con su color hexadecimal real
+colores_exactos <- setNames(unique(df_anio$color), unique(df_anio$comunidad))
+
+# Generamos el gráfico de barras proporcionales
+ggplot(df_anio, aes(x = bloque, fill = comunidad)) +
+  geom_bar(position = "fill") + 
+  scale_fill_manual(values = colores_exactos) + 
+  labs(
+    title = "Fragmentación Partidaria en la Cámara de Diputados (2026)",
+    subtitle = "Distribución proporcional de cada bloque formal según la comunidad detectada en la red",
+    x = "Bloque Político Formal",
+    y = "Proporción de Diputados",
+    fill = "Comunidad (Red)"
+  ) +
+  theme_minimal() +
+  theme(
+    axis.text.x = element_text(angle = 45, hjust = 1), 
+    legend.position = "right",
+    plot.title = element_text(face = "bold", size = 14)
+  )
+```
+
+#### Hallazgos principales
+
+A partir de la visualización, observamos empíricamente cómo se comportan los bloques puertas adentro en el escenario 2026:
+
+- Alta cohesión y disciplina total: Espacios como el Frente de Izquierda y de Trabajadores - Unidad, Defendamos Córdoba, La Neuquinidad, Por Santa Cruz y Mid - Movimiento de Integración y Desarrollo exhiben una alineación compacta. Sus integrantes se concentran de manera unívoca o mayoritaria en una sola comunidad de red, reflejando votaciones orgánicas y sin disidencias significativas.
+
+- Fragmentación moderada en el oficialismo: La Libertad Avanza presenta una estructura policéntrica dividida en al menos cuatro subgrupos en la red, aunque con un alto grado de ordenamiento interno (concentrando más del 90% de sus miembros en dos comunidades principales).
+
+- Rupturas estructurales en bloques tradicionales: La UCR se encuentra fragmentada en distintos bloques comunitarios, mientras que Unión por la Patria exhibe la mayor dispersión del recinto, abarcando múltiples comunidades con su masa principal distribuida principalmente entre dos núcleos.
+
+- Bifurcaciones simétricas (50/50): Bloques provinciales y dialoguistas como Coalición Cívica y Encuentro Federal muestran una partición simétrica dividida exactamente a la mitad entre dos comunidades de red, evidenciando votaciones divididas entre sus integrantes.
+
+<br>
+
+### 2. Disidencia Interna: ¿Quiénes votan lejos de su bloque?
+
+Tras observar la fragmentación de los bloques a nivel macro en el apartado anterior, en esta segunda sección nos enfocamos en medir empíricamente la **disidencia partidaria a nivel individual**. El objetivo es detectar a aquellos legisladores que, a pesar de pertenecer formalmente a un bloque político, registran patrones de votación sistemáticamente alejados del núcleo de su propia bancada.
+
+Para lograrlo, calculamos la **distancia ideológica media** de cada diputado respecto a todos los compañeros de su mismo espacio. Al utilizar las distancias absolutas extraídas de la red de votaciones, esta métrica cuantifica la magnitud del aislamiento interno: los diputados con valores más altos son los verdaderos "líberos" del recinto. Esto evidencia una ruptura empírica en la disciplina y la cohesión de sus bloques, independientemente de hacia qué otro sector político se estén acercando en la práctica.
+
+
+```{r disidencia-interna}
+
+# Filtramos los datos para el año 2026
+d_2026 <- distancias_idps[anio == 2026]
+l_2026 <- l_metadata[yr == 2026]
+
+# Homogeneizamos los nombres de las columnas
+setnames(d_2026, c("nombre1", "nombre2", "distancia"), c("Source", "Target", "weight"))
+
+# Cruzamos la información para asignarle el bloque formal tanto al Source como al Target
+d_2026 <- merge(d_2026, l_2026[, .(legislador, bloque)], by.x = "Source", by.y = "legislador", all.x = TRUE)
+setnames(d_2026, "bloque", "bloque_source")
+
+d_2026 <- merge(d_2026, l_2026[, .(legislador, bloque)], by.x = "Target", by.y = "legislador", all.x = TRUE)
+setnames(d_2026, "bloque", "bloque_target")
+
+# Filtramos SOLO los pares de legisladores que pertenecen al MISMO bloque formal
+pares_mismo_bloque <- d_2026[bloque_source == bloque_target & !is.na(bloque_source)]
+
+# Armamos un listado completo donde cada legislador tenga todas las distancias con sus compañeros
+t1 <- pares_mismo_bloque[, .(legislador = Source, dist = weight)]
+t2 <- pares_mismo_bloque[, .(legislador = Target, dist = weight)]
+todos_pares <- rbind(t1, t2)
+
+# Calculamos el promedio de esas distancias por cada legislador
+disidencia_df <- todos_pares[, .(Distancia_Media = mean(dist, na.rm = TRUE)), by = legislador]
+disidencia_df <- merge(disidencia_df, l_2026[, .(legislador, bloque)], by = "legislador")
+
+# Ordenamos de mayor a menor, seleccionamos las columnas finales y redondeamos
+top_disidentes <- disidencia_df %>%
+  arrange(desc(Distancia_Media)) %>%
+  slice_head(n = 10) %>%
+  select(Legislador = legislador, Bloque = bloque, `Distancia Media al Bloque` = Distancia_Media) %>%
+  mutate(`Distancia Media al Bloque` = round(`Distancia Media al Bloque`, 4))
+
+# Mostramos la tabla formateada
+kable(top_disidentes, caption = "Top 10 Diputados con mayor lejanía ideológica respecto a su propio bloque (2026)")
+
+```
+
+#### Hallazgos principales
+Los datos de la tabla confirman de manera individual la crisis de cohesión que observamos a nivel grupal en el análisis de fragmentación:
+
+- Hegemonía disidente en Unión por la Patria: El dato más contundente es que 9 de los 10 diputados con mayor lejanía respecto a su propio bloque pertenecen a Unión por la Patria. Legisladores como Fernanda Miño, Blanca Inés Osuna e Itaí Hagman encabezan el índice de disidencia con distancias medias superiores a 0.60. Esto explica matemáticamente por qué este bloque aparecía fracturado en múltiples comunidades en el análisis previo: sus integrantes votan con un grado de dispersión altísimo respecto al centro de gravedad de su propio partido.   
+
+- El caso de la Coalición Cívica: El único legislador fuera del bloque peronista que ingresa al Top 10 es Maximiliano Ferraro, perteneciente a la Coalición Cívica. Este hallazgo es coherente con la visualización del primer apartado, donde se evidenció que este espacio menor se encontraba partido simétricamente a la mitad, confirmando la fuerte disidencia interna en sus votaciones.   
+
+<br>
+
+### 3. ¿Quiénes son los legisladores "puente"?
+
+Más allá de la disciplina general de los bloques, el análisis de redes nos permite detectar a aquellos legisladores que ocupan posiciones estratégicas de intermediación (*betweenness*). Un alto valor de esta métrica indica que el diputado actúa como un nexo o "puente" entre diferentes comunidades ideológicas, conectando sectores que no votan de la misma manera.
+
+```{r disidentes-tabla}
+
+# Filtramos 2026, ordenamos por intermediación y seleccionamos las columnas clave
+tabla_puentes <- df_nodos %>%
+  filter(anio == 2026) %>%
+  arrange(desc(betweenness)) %>%
+  slice_head(n = 10) %>%
+  select(Legislador = legislador, Bloque = bloque, Intermediación = betweenness, Grado = degree)
+
+# Redondeamos la métrica para que quede prolija en la tabla
+tabla_puentes$Intermediación <- round(tabla_puentes$Intermediación, 4)
+
+# Generamos la tabla interactiva/estática para el reporte
+kable(tabla_puentes, caption = "Top 10 Diputados con mayor centralidad de intermediación (2026)")
+
+```
+
+#### Hallazgos principales
+
+Los datos revelan que los diputados con mayor centralidad de intermediación (betweenness) no pertenecen a los bloques mayoritarios polarizados, sino a espacios provinciales y bloques dialoguistas como Argentina Federal, Provincias Unidas y el MID.
+
+Un dato clave es la homogeneidad en los valores de intermediación y de grado de este top 10 (con valores de intermediación cercanos a 0.241 y grados de entre 31 y 35 conexiones). Esto demuestra que no existe un único líder absoluto actuando como "puente", sino un núcleo colectivo de articulación compuesto por legisladores de estos bloques intermedios. Su rol es estructuralmente fundamental para el recinto, ya que operan como nexos indispensables encargados de conectar y tender puentes entre las diferentes comunidades ideológicas del cuerpo.
+
+<br>
+
+## Evolución Temporal: ¿Qué cambió entre 2025 y 2026?
+
+La renovación parlamentaria y el avance del período legislativo transforman la dinámica de alianzas y la cohesión de las bancadas. En esta sección analizamos la red de votaciones entre 2025 y 2026 mediante un abordaje en tres niveles: las métricas topológicas globales de la red, la fragmentación interna por bloque formal y la evolución de la cohesión en la selección de los 7 bloques políticos más representativos.
+
+* Nota metodológica: Las etiquetas numéricas de las comunidades (Comunidad 1, Comunidad 2, etc.) constituyen identificadores topológicos calculados de manera independiente para cada grafo anual. Por ende, no representan etiquetas longitudinales continuas. La utilidad del análisis por bloque radica en evaluar la cohesión interna de cada partido dentro de cada período: un bloque con alta disciplina concentrará a sus diputados en una sola comunidad, mientras que un partido fragmentado los mostrará divididos en múltiples agrupamientos de votación.
+
+```{r setup-y-tabla-global}
+# Preparación de datos
+df_temp <- df_nodos %>%
+  filter(anio %in% c(2025, 2026)) %>%
+  copy()
+
+df_temp[, num_com := as.numeric(gsub("Comunidad ", "", comunidad))]
+df_temp[, comunidad := factor(comunidad, levels = paste("Comunidad", sort(unique(num_com))))]
+colores_exactos <- setNames(unique(df_temp$color), unique(df_temp$comunidad))
+
+# Tabla de métricas
+resumen_temporal <- df_temp %>%
+  group_by(Anio = anio) %>%
+  summarise(
+    `Total Legisladores` = n(),
+    `Bloques Formales` = n_distinct(bloque),
+    `Comunidades Detectadas` = n_distinct(comunidad),
+    `Grado Promedio` = round(mean(degree, na.rm = TRUE), 2),
+    `Intermediación Promedio` = round(mean(betweenness, na.rm = TRUE), 4)
+  )
+
+kable(resumen_temporal, caption = "Comparativa de Métricas Topológicas de la Red (2025 vs 2026)")
+```
+
+<br>
+
+### 1. Fragmentación Partidaria Interna
+```{r grafico-fragmentacion, fig.width=11, fig.height=7}
+ggplot(df_temp, aes(x = bloque, fill = comunidad)) +
+  geom_bar(position = "fill") +
+  scale_fill_manual(values = colores_exactos) +
+  facet_wrap(~anio, ncol = 1) +
+  labs(
+    title = "Fragmentación Partidaria Interna (2025 vs. 2026)",
+    subtitle = "Proporción de comunidades de la red que conviven dentro de cada bloque formal",
+    x = "Bloque Político Formal", y = "Proporción de Diputados", fill = "Comunidad (Red)"
+  ) +
+  theme_minimal() +
+  theme(
+    plot.background = element_rect(fill = "white", color = NA),
+    panel.background = element_rect(fill = "white", color = NA),
+    axis.text.x = element_text(angle = 45, hjust = 1, size = 9),
+    legend.position = "right",
+    strip.text = element_text(face = "bold", size = 12),
+    plot.title = element_text(face = "bold", size = 13)
+  )
+```
+
+<br>
+
+
+### 2. Evolución de Cohesión Interna por Bloque Político
+
+A continuación se presenta la distribución de los diputados de cada bloque político formal en las distintas comunidades ideológicas de la red (2025 vs. 2026):
+
+
+```{r detalle-por-bloque-loop, fig.width=9, fig.height=6.5, results='asis'}
+# 1. Unificación de etiquetas de la Izquierda
+df_temp <- df_temp %>%
+  mutate(bloque = if_else(
+    str_detect(bloque, "(?i)frente de izquierda|pts-|fit"),
+    "Frente De Izquierda Y De Trabajadores Unidad",
+    bloque
+  ))
+
+# 2. Selección de los 7 bloques clave
+bloques_clave <- c(
+  "La Libertad Avanza",
+  "Union Por La Patria",
+  "Pro",
+  "Ucr - Union Civica Radical",
+  "Provincias Unidas",
+  "Encuentro Federal",
+  "Frente De Izquierda Y De Trabajadores Unidad"
+)
+
+bloques_filtrados <- intersect(bloques_clave, unique(df_temp$bloque))
+
+# 3. Bucle de gráficos
+for (blq in bloques_filtrados) {
+  df_sub <- df_temp %>% filter(bloque == blq)
+  
+  if (nrow(df_sub) > 0) {
+    df_agrupado <- df_sub %>%
+      count(comunidad, anio, name = "cantidad") %>%
+      mutate(anio = factor(anio, levels = c("2025", "2026")))
+    
+    p <- ggplot(df_agrupado, aes(x = reorder(comunidad, cantidad), y = cantidad, fill = comunidad)) +
+      geom_col(width = 0.6, show.legend = FALSE) +
+      geom_text(
+        aes(label = cantidad),
+        hjust = -0.3, size = 3.8, fontface = "bold", color = "#1e293b"
+      ) +
+      coord_flip() +
+      facet_wrap(~anio, ncol = 1, scales = "free_y") +
+      scale_fill_manual(values = colores_exactos) +
+      scale_y_continuous(expand = expansion(mult = c(0, 0.25))) +
+      labs(
+        title = paste("Cohesión Interna:", blq),
+        subtitle = "Distribución de sus diputados en las comunidades de la red (2025 vs. 2026)",
+        x = "Comunidad Detectada (Red)",
+        y = "Cantidad de Diputados"
+      ) +
+      theme_minimal(base_size = 11) +
+      theme(
+        plot.background = element_rect(fill = "white", color = NA),
+        panel.background = element_rect(fill = "white", color = NA),
+        panel.grid.major.y = element_line(color = "#cbd5e1", linetype = "dashed", size = 0.5),
+        panel.grid.major.x = element_line(color = "#f1f5f9"),
+        plot.title = element_text(face = "bold", size = 13, color = "#0f172a"),
+        plot.subtitle = element_text(size = 10, color = "#475569", margin = margin(b = 10)),
+        axis.text.y = element_text(color = "#0f172a", size = 9.5, face = "bold"),
+        axis.text.x = element_text(color = "#475569", size = 9),
+        strip.text = element_text(face = "bold", size = 11, color = "#1e293b")
+      )
+    
+    cat("\n\n#### ", blq, "\n\n")
+    print(p)
+  }
+}
+```
+
+<br>
+
+#### Hallazgos principales
+
+El análisis longitudinal de la red de votaciones muestra una transformación estructural en la dinámica parlamentaria de la Cámara de Diputados entre 2025 y 2026. En 2025, el recinto reflejaba un mapa altamente atomizado donde incluso las bancadas formales más numerosas coexistían fracturadas en múltiples subcomunidades topológicas. Hacia 2026, la evidencia gráfica confirma un proceso de reordenamiento y polarización, caracterizado por la reducción de facciones disidentes internas y un incremento generalizado en la disciplina de voto. 
+
+Al profundizar en la muestra seleccionada de las 7 fuerzas políticas más relevantes, se observan cuatro patrones de comportamiento claramente diferenciados:
+
+**1. Consolidación y Disciplina en los Grandes Polos (LLA y UxP): **
+
+- La Libertad Avanza (LLA): Evolucionó desde una fuerte heterogeneidad inicial en 2025 (dividida entre las comunidades 2, 11, 6 y 5) hacia una estructura marcadamente disciplinada en 2026, donde el 95% de sus miembros se alinearon en dos núcleos compactos (Comunidad 8 con 53 diputados y Comunidad 6 con 37).
+
+- Unión por la Patria (UxP): En 2025 presentaba una fragmentación dispersa en seis subgrupos. En 2026 logró contener las discrepancias secundarias y agrupar a su núcleo duro en torno a la Comunidad 5 (52 diputados) y la Comunidad 3 (27 diputados).
+
+**2. Convergencia y Reestructuración en Aliados (PRO y UCR):**
+
+- PRO: Depuró la atomización interna observada en 2025 (donde votaba repartido en 5 comunidades) para operar en 2026 como el socio legislativo más compacto, agrupando a 11 de sus 12 representantes en la Comunidad 4.   
+
+- Unión Cívica Radical (UCR): Exhibió un proceso de atrición y reconfiguración: la bancada remanente en 2026 se desplazó de manera dividida hacia espacios de convergencia con el oficialismo y sectores dialoguistas (Comunidades 8 y 6).   
+
+**3. Coordinación Pragmática y Bloques Bisagra (Provincias Unidas y Encuentro Federal):**
+
+- Provincias Unidas: Constituye el caso más contundente de cohesión provincial. Tras figurar fragmentado en tres comunidades en 2025, en 2026 logró un comportamiento prácticamente monolítico, alineando a 17 de sus 18 diputados en la Comunidad 2 para articular su capacidad de negociación.
+
+- Encuentro Federal: Mostró la dinámica opuesta de contracción, pasando de un bloque unificado de 7 legisladores en 2025 a perder volumen y fragmentarse individualmente en 2026.   
+
+**4. Cohesión Absoluta en el Polo Ideológico (FIT-U):**
+
+- Frente de Izquierda y de Trabajadores Unidad: El análisis unificado evidencia una transición desde un esquema parcialmente dividido en 2025 (repartido entre las comunidades 9, 10 y 8) hacia una cohesión perfecta del 100% en 2026, aglutinando a la totalidad de sus 5 legisladores activos dentro de la Comunidad 1 en el extremo de la red.
+
+- Nota metodológica: Se unificaron bajo la etiqueta general Frente de Izquierda y de Trabajadores - Unidad las distintas denominaciones de sus partidos integrantes (PTS, Partido Obrero, Izquierda Socialista, MST) para analizar el comportamiento global de la coalición.
+
+**En conclusion:** 
+
+- El período 2025–2026 marca el paso de un período de aprendizaje e incertidumbre legislativa hacia un escenario caracterizado por bancadas oficialistas y opositoras más orgánicas, acompañadas por bloques provinciales que aprendieron a funcionar como colectivos homogéneos de decisión. Esta reducción de la indisciplina partidaria interna transformó la dinámica del recinto, sustituyendo las negociaciones individuales con diputados por acuerdos de bloque de mayor escala e impacto político.
