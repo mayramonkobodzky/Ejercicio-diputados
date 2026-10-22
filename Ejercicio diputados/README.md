@@ -1,4 +1,3 @@
-Markdown
 # Analisis Estructural y Longitudinal de la Camara de Diputados de la Nacion
 
 Este repositorio contiene el codigo, los datos procesados y los informes generados para el analisis de redes, cohesion interna, fragmentacion y dinamicas de bloques en la Camara de Diputados de la Nacion Argentina entre los anos 2025 y 2026.
